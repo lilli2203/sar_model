@@ -79,7 +79,6 @@ print('Data source import complete.')
 logging.info('Data source import complete.')
 
 import tensorflow as tf
-
 import os
 import pathlib
 import time
@@ -88,6 +87,7 @@ import glob
 import rasterio
 import numpy as np
 import cv2
+import tensorflow as tf
 
 from matplotlib import pyplot as plt
 %matplotlib inline
@@ -97,33 +97,113 @@ def sar_preprop1(img):
     kernel = np.array([[-1, 1, -1],
                        [-1, 1,-1],
                        [-1, 1, -1]])
-    processed_img= cv2.filter2D(src=img, ddepth=-1, kernel=kernel)
+    processed_img = cv2.filter2D(src=img, ddepth=-1, kernel=kernel)
     return processed_img
-
 
 def sar_preprop2(img):
-    kernel = np.ones((5,5),np.float32)/25
-    processed_img= cv2.filter2D(src=img, ddepth=-1, kernel=kernel)
+    kernel = np.ones((5, 5), np.float32) / 25
+    processed_img = cv2.filter2D(src=img, ddepth=-1, kernel=kernel)
     return processed_img
 
-def sar_image(file_path):  #.tif file
-    ds = rasterio.open(file_path)
-    img = ds.read()
-    img = cv2.medianBlur(img,5)
-    img = img.reshape(img.shape[-1],img.shape[-2],img.shape[0])
+def sar_preprop3(img):
+    processed_img = cv2.GaussianBlur(img, (5, 5), 0)
+    return processed_img
 
-    img1 = sar_preprop1(img)
-    img2 = sar_preprop2(img)
-    img = np.dstack((img,img1,img2))
-    img = tf.cast(img, tf.float32)
-    return img
+def sar_image(file_path):  # .tif file
+    try:
+        ds = rasterio.open(file_path)
+        img = ds.read()
+        img = cv2.medianBlur(img, 5)
+        img = img.reshape(img.shape[-1], img.shape[-2], img.shape[0])
+
+        img1 = sar_preprop1(img)
+        img2 = sar_preprop2(img)
+        img3 = sar_preprop3(img)
+        img = np.dstack((img, img1, img2, img3))
+        img = tf.cast(img, tf.float32)
+        return img
+    except Exception as e:
+        print(f"Error processing SAR image {file_path}: {e}")
+        return None
+
+def eo_preprop1(img):
+    processed_img = cv2.equalizeHist(img)
+    return processed_img
+
+def eo_preprop2(img):
+    processed_img = cv2.fastNlMeansDenoisingColored(img, None, 10, 10, 7, 21)
+    return processed_img
 
 def eo_image(file_path):
-    img = None
-    with rasterio.open(file_path) as ds:
-        b1 = ds.read(1)[:-1,:-1]
-        b2 = ds.read(2)[:-1,:-1]
-        b3 = ds.read(3)[:-1,:-1]
-        img = np.dstack((b1, b2, b3))
-    img = tf.cast(img, tf.float32)
-    return img
+    try:
+        img = None
+        with rasterio.open(file_path) as ds:
+            b1 = ds.read(1)[:-1, :-1]
+            b2 = ds.read(2)[:-1, :-1]
+            b3 = ds.read(3)[:-1, :-1]
+            img = np.dstack((b1, b2, b3))
+        img = eo_preprop1(img)
+        img = eo_preprop2(img)
+        img = tf.cast(img, tf.float32)
+        return img
+    except Exception as e:
+        print(f"Error processing EO image {file_path}: {e}")
+        return None
+
+def plot_images(img, title="Image"):
+    plt.figure(figsize=(10, 10))
+    plt.imshow(img)
+    plt.title(title)
+    plt.axis('off')
+    plt.show()
+
+def compare_images(img1, img2, title1="Image 1", title2="Image 2"):
+    fig, axes = plt.subplots(1, 2, figsize=(15, 15))
+    axes[0].imshow(img1)
+    axes[0].set_title(title1)
+    axes[0].axis('off')
+    axes[1].imshow(img2)
+    axes[1].set_title(title2)
+    axes[1].axis('off')
+    plt.show()
+
+def process_directory(directory, process_func):
+    file_paths = glob.glob(os.path.join(directory, "*.tif"))
+    processed_images = []
+    for file_path in file_paths:
+        img = process_func(file_path)
+        if img is not None:
+            processed_images.append(img)
+    return processed_images
+
+def save_processed_images(images, directory, prefix="processed"):
+    pathlib.Path(directory).mkdir(parents=True, exist_ok=True)
+    for i, img in enumerate(images):
+        save_path = os.path.join(directory, f"{prefix}_{i}.npy")
+        np.save(save_path, img.numpy())
+        print(f"Saved processed image to {save_path}")
+
+
+sar_directory = ""
+eo_directory = ""
+processed_sar_images = process_directory(sar_directory, sar_image)
+processed_eo_images = process_directory(eo_directory, eo_image)
+
+
+save_processed_images(processed_sar_images, "processed/sar")
+save_processed_images(processed_eo_images, "processed/eo")
+
+
+if processed_sar_images:
+    plot_images(processed_sar_images[0], title="Processed SAR Image")
+if processed_eo_images:
+    plot_images(processed_eo_images[0], title="Processed EO Image")
+
+
+if processed_sar_images:
+    original_sar_image = rasterio.open(glob.glob(os.path.join(sar_directory, "*.tif"))[0]).read()
+    compare_images(original_sar_image, processed_sar_images[0], title1="Original SAR Image", title2="Processed SAR Image")
+if processed_eo_images:
+    original_eo_image = rasterio.open(glob.glob(os.path.join(eo_directory, "*.tif"))[0]).read()
+    compare_images(original_eo_image, processed_eo_images[0], title1="Original EO Image", title2="Processed EO Image")
+
