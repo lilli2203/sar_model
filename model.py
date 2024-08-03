@@ -207,3 +207,62 @@ if processed_eo_images:
     original_eo_image = rasterio.open(glob.glob(os.path.join(eo_directory, "*.tif"))[0]).read()
     compare_images(original_eo_image, processed_eo_images[0], title1="Original EO Image", title2="Processed EO Image")
 
+BUFFER_SIZE = 10000
+# The batch size of 1 produced better results for the U-Net in the original pix2pix experiment
+BATCH_SIZE = 1
+# Each image is 256x256 in size
+IMG_WIDTH = 256
+IMG_HEIGHT = 256
+
+
+
+def resize(input_image, real_image, height, width):
+    input_image = tf.image.resize(input_image, [height, width],
+                                method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+    real_image = tf.image.resize(real_image, [height, width],
+                               method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+
+    return input_image, real_image
+
+def random_crop(input_image, real_image):
+    stacked_image = tf.stack([input_image, real_image], axis=0)
+    cropped_image = tf.image.random_crop(
+      stacked_image, size=[2, IMG_HEIGHT, IMG_WIDTH, 3])
+
+    return cropped_image[0], cropped_image[1]
+
+# Normalizing the images to [-1, 1]
+def normalize(input_image, real_image):
+    input_image = (input_image / 127.5) - 1
+    real_image = (real_image / 127.5) - 1
+
+    return input_image, real_image
+
+@tf.function()
+def random_jitter(input_image, real_image):
+    input_image, real_image = resize(input_image, real_image, 286, 286)
+    input_image, real_image = random_crop(input_image, real_image)
+
+    if tf.random.uniform(()) > 0.5:
+        input_image = tf.image.flip_left_right(input_image)
+        real_image = tf.image.flip_left_right(real_image)
+
+    return input_image, real_image
+
+def generate_train_dataset(train_dir):
+    eo_dir = os.path.join(train_dir, 'eo')
+    sar_dir = os.path.join(train_dir, 'sar')
+    eo_files = glob.glob(os.path.join(eo_dir, '**', '*.tif'), recursive=True)
+    filenames = [eo_file.split('/')[-1] for eo_file in eo_files]
+    print(len(filenames))
+    dataset = []
+    for name in filenames:
+        input_image = sar_image(os.path.join(sar_dir, name))
+        real_image = eo_image(os.path.join(eo_dir, name))
+        input_image, real_image = random_jitter(input_image, real_image)
+        input_image, real_image = normalize(input_image, real_image)
+        train_datapoint = [real_image, input_image]
+        dataset.append(train_datapoint)
+    return dataset
+
+
