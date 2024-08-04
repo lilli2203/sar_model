@@ -34,16 +34,11 @@ try:
 except FileExistsError:
     pass
 
-for data_source_mapping in DATA_SOURCE_MAPPING.split(','):
-    directory, download_url_encoded = data_source_mapping.split(':')
-    download_url = unquote(download_url_encoded)
-    filename = os.path.basename(urlparse(download_url).path)
-    destination_path = os.path.join(KAGGLE_INPUT_PATH, directory)
-
+def download_and_extract(url, destination_path):
     try:
-        with urlopen(download_url) as fileres, NamedTemporaryFile() as tfile:
+        with urlopen(url) as fileres, NamedTemporaryFile() as tfile:
             total_length = int(fileres.headers.get('content-length', 0))
-            logging.info(f'Downloading {directory}, {total_length} bytes compressed')
+            logging.info(f'Downloading {url}, {total_length} bytes compressed')
             dl = 0
             start_time = time.time()
             while True:
@@ -59,24 +54,61 @@ for data_source_mapping in DATA_SOURCE_MAPPING.split(','):
                 sys.stdout.flush()
             tfile.flush()
 
-            if filename.endswith('.zip'):
+            if url.endswith('.zip'):
                 with ZipFile(tfile.name) as zfile:
                     zfile.extractall(destination_path)
             else:
                 with tarfile.open(tfile.name) as tarfile_obj:
                     tarfile_obj.extractall(destination_path)
-            print(f'\nDownloaded and uncompressed: {directory}')
-            logging.info(f'Downloaded and uncompressed: {directory}')
-
+            print(f'\nDownloaded and uncompressed: {destination_path}')
+            logging.info(f'Downloaded and uncompressed: {destination_path}')
     except HTTPError as e:
-        logging.error(f'Failed to load (likely expired) {download_url} to path {destination_path}, HTTPError: {e}')
-        print(f'Failed to load (likely expired) {download_url} to path {destination_path}')
+        logging.error(f'Failed to load (likely expired) {url} to path {destination_path}, HTTPError: {e}')
+        print(f'Failed to load (likely expired) {url} to path {destination_path}')
     except OSError as e:
-        logging.error(f'Failed to load {download_url} to path {destination_path}, OSError: {e}')
-        print(f'Failed to load {download_url} to path {destination_path}')
+        logging.error(f'Failed to load {url} to path {destination_path}, OSError: {e}')
+        print(f'Failed to load {url} to path {destination_path}')
+
+for data_source_mapping in DATA_SOURCE_MAPPING.split(','):
+    directory, download_url_encoded = data_source_mapping.split(':')
+    download_url = unquote(download_url_encoded)
+    filename = os.path.basename(urlparse(download_url).path)
+    destination_path = os.path.join(KAGGLE_INPUT_PATH, directory)
+    
+    if not os.path.exists(destination_path):
+        os.makedirs(destination_path, exist_ok=True)
+
+    download_and_extract(download_url, destination_path)
 
 print('Data source import complete.')
 logging.info('Data source import complete.')
+
+def add_new_dataset(data_source_mapping):
+    for data_source_mapping in data_source_mapping.split(','):
+        directory, download_url_encoded = data_source_mapping.split(':')
+        download_url = unquote(download_url_encoded)
+        filename = os.path.basename(urlparse(download_url).path)
+        destination_path = os.path.join(KAGGLE_INPUT_PATH, directory)
+        
+        if not os.path.exists(destination_path):
+            os.makedirs(destination_path, exist_ok=True)
+
+        download_and_extract(download_url, destination_path)
+
+new_data_source_mapping = 'new-dataset:https%3A%2F%2Fexample.com%2Fpath%2Fto%2Fnew%2Fdataset.zip'
+add_new_dataset(new_data_source_mapping)
+
+def clean_up_logs(log_file_path='download.log', max_lines=1000):
+    with open(log_file_path, 'r') as file:
+        lines = file.readlines()
+
+    if len(lines) > max_lines:
+        with open(log_file_path, 'w') as file:
+            file.writelines(lines[-max_lines:])
+    print('Log file cleaned up.')
+
+clean_up_logs()
+
 
 import tensorflow as tf
 import os
