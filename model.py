@@ -559,3 +559,130 @@ image_pairs = [(os.path.join(train_dir, 'sar', name), os.path.join(train_dir, 'e
                for name in os.listdir(os.path.join(train_dir, 'sar'))]
 train_dataset = create_dataset(image_pairs, is_training=True)
 fit(train_dataset, epochs=150)
+
+for example_input, example_target in train_dataset.take(1):
+  generate_images(generator, example_input, example_target)
+
+log_dir="logs/"
+
+summary_writer = tf.summary.create_file_writer(
+  log_dir + "fit/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+
+@tf.function
+def train_step(input_image, target, step):
+    with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
+        gen_output = generator(input_image, training=True)
+
+        disc_real_output = discriminator([input_image, target], training=True)
+        disc_generated_output = discriminator([input_image, gen_output], training=True)
+
+        gen_total_loss, gen_gan_loss, gen_l1_loss = generator_loss(disc_generated_output, gen_output, target)
+        disc_loss = discriminator_loss(disc_real_output, disc_generated_output)
+
+    generator_gradients = gen_tape.gradient(gen_total_loss,
+                                          generator.trainable_variables)
+    discriminator_gradients = disc_tape.gradient(disc_loss,
+                                               discriminator.trainable_variables)
+
+    generator_optimizer.apply_gradients(zip(generator_gradients,
+                                          generator.trainable_variables))
+    discriminator_optimizer.apply_gradients(zip(discriminator_gradients,
+                                              discriminator.trainable_variables))
+
+    with summary_writer.as_default():
+      tf.summary.scalar('gen_total_loss', gen_total_loss, step=step//1000)
+      tf.summary.scalar('gen_gan_loss', gen_gan_loss, step=step//1000)
+      tf.summary.scalar('gen_l1_loss', gen_l1_loss, step=step//1000)
+      tf.summary.scalar('disc_loss', disc_loss, step=step//1000)
+
+
+    return {
+    'gen_total_loss': gen_total_loss,
+    'gen_gan_loss': gen_gan_loss,
+    'gen_l1_loss': gen_l1_loss,
+    'disc_loss': disc_loss,
+    'step_divided_by_1000': step // 1000  # Assuming you want to include this transformation as well
+    }
+
+def fit(train_ds, test_ds, steps):
+    example_input, example_target = next(iter(test_ds.take(1)))
+    start = time.time()
+    hist=[]
+
+    for step, (input_image, target) in train_ds.repeat().take(steps).enumerate():
+        if (step) % 1000 == 0:
+            if step != 0:
+                print(f'Time taken for 1000 steps: {time.time()-start:.2f} sec\n')
+
+            start = time.time()
+
+            generate_images(generator, example_input, example_target)
+            print(f"Step: {step//1000}k")
+
+        metrics = train_step(input_image, target, step)
+        hist.append(metrics)
+
+        if (step+1) % 10 == 0:
+            print('.', end='', flush=True)
+
+
+        if (step + 1) % 5000 == 0:
+            checkpoint.save(file_prefix=checkpoint_prefix)
+    return hist
+
+%load_ext tensorboard
+%tensorboard --logdir {log_dir}
+
+hist = fit(train_dataset, test_dataset, steps=4000)
+
+data = hist
+keys = data[0].keys()
+organized_data = {key: [] for key in keys}
+for item in data:
+    for key in keys:
+        organized_data[key].append(item[key].numpy())
+
+for key in keys:
+    if key == 'step_divided_by_1000':  # Skip 'step_divided_by_1000' for plotting
+        continue
+    plt.figure(figsize=(8, 4))
+    plt.plot(organized_data[key], label=key)
+    plt.title(f'{key} over Steps')
+    plt.xlabel('Step')
+    plt.ylabel(key)
+    plt.legend()
+    plt.show()
+
+def generate_test_dataset(train_dir, test_dir):
+    eo_dir = os.path.join(train_dir, 'eo')
+    sar_dir = os.path.join(train_dir, 'sar')
+    sar_test_dir = os.path.join(test_dir, 'sar')
+    sar_test_files = glob.glob(os.path.join(sar_test_dir, '**', '*.tif'), recursive=True)
+    eo_files = glob.glob(os.path.join(eo_dir, '**', '*.tif'), recursive=True)
+    filenames = [eo_file.split('/')[-1] for eo_file in eo_files]
+    dataset = []
+    for i in range(len(sar_test_files)):
+        name = filenames[i]
+        input_image = sar_image(sar_test_files[i])
+        real_image = eo_image(os.path.join(eo_dir, name))
+        input_image, real_image = resize(input_image, real_image,
+                                   IMG_HEIGHT, IMG_WIDTH)
+        input_image, real_image = normalize(input_image, real_image)
+        train_datapoint = [real_image, input_image]
+        dataset.append(train_datapoint)
+    return dataset
+
+
+ds = generate_test_dataset('/kaggle/input/ai-spacetech-hackathon/train', '/kaggle/input/ai-spacetech-hackathon/test')
+
+test_dataset = tf.data.Dataset.from_tensor_slices(ds)
+test_dataset = test_dataset.map(separate_tensor)
+test_dataset = test_dataset.shuffle(BUFFER_SIZE)
+test_dataset = test_dataset.batch(BATCH_SIZE)
+
+# Run the trained model on examples from the test set
+for inp, tar in test_dataset.take(122):
+  generate_images(generator, inp, tar)
+
+
+
